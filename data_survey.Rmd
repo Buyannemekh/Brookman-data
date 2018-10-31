@@ -144,8 +144,7 @@ for(item in reverse.coded.items) data[,item] <- -1 * data[,item]
 
 ### Procedue for Combining Outcomes into Indices
 
-
-```{r}
+```{r, include = FALSE}
 # Compute factor analysis outcome
 compute.factor.dv <- function(dv.names, respondent.booleans, print.loadings = TRUE){
   responders <- data[respondent.booleans,]
@@ -171,7 +170,7 @@ compute.factor.dv <- function(dv.names, respondent.booleans, print.loadings = TR
 }
 ```
 
-```{r}
+```{r, include = FALSE}
 # In this code section we implement the procedures describe previously.
 
 # First, misc. housekeeping.
@@ -209,12 +208,11 @@ data$gender_nonconformity_t0 <- compute.factor.dv(gender.nonconformity.t0, data$
 data$gender_nonconformity_t1 <- compute.factor.dv(gender.nonconformity.t1, data$respondent_t1==1 & !is.na(data$respondent_t1))
 ```
 
-
 ## Estimation Procedures
 
 ### Contact Rate
 
-```{r}
+```{r, include = FALSE}
 # This dummy records whether the intervention was actually delivered vs. was not for any reason.
 # Note that we do not use this variable to conduct comparisons only to measure successful contact rates.
 data$treatment.delivered <- data$exp_actual_convo == "Trans-Equality" & !is.na(data$canvass_trans_ratingstart)
@@ -223,7 +221,7 @@ data$treatment.delivered <- data$exp_actual_convo == "Trans-Equality" & !is.na(d
 ### Complier Average Causal Effect Estimation
 To estimate complier average causal effects, we rely on ordinary least squares (OLS) with cluster-robust standard errors, clustering on household and residualizing using pre-treatment covariates from the baseline survey and voter list. This procedure and these covariates were pre-specified in advance and produce unbiased estimates of causal effects (*33*). We also adjust for the contact rate, as described above. Finally, we implement Olken's rejection rule (*43*) as specified in our pre-analysis plan, which denoted the bottom 1\% and top 4\% of the sampling distribution as the rejection region (instead of either the bottom 2.5\% and top 2.5\% or only top 5\% as is conventional). We report p-values for this region and otherwise report "n.s." (*43*). (The only result this rule affects is the 3-month effect on the law index.)
 
-```{r}
+```{r, include=FALSE}
 t0.covariate.names <- c('miami_trans_law_t0', 'miami_trans_law2_t0', 'therm_trans_t0', 
 'gender_norms_sexchange_t0', 'gender_norms_moral_t0', 'gender_norms_abnormal_t0',
 'ssm_t0', 'therm_obama_t0', 'therm_gay_t0','vf_democrat', 'ideology_t0', 
@@ -282,17 +280,7 @@ est.ate <- function(dv, include.obs = NULL, include.covariates = TRUE){
 
 ### Heterogenous Treatment Effects
 
-We searched for heterogenous treatment effects by computing a residualized trans.tolerance.dv.t1 among t1 responders (residualizing using the pre-specified covariates but not the treatment indicator) then testing whether the treatment effect on this residualized index was larger for some subgroups. (Residualizing first makes sure the coefficients on the covariates do not differ within subgroups when we compute estimates within subgroups.) In our pre-analysis plan, we specified three predictions about treatment effect heterogeneity by subject attributes:
-
-1. Democrats will be more treatment-responsive than Republicans as a result of partisan cues being more aligned, 
-2. Subjects higher on the baseline support scale will be more treatment-responsive as a result of being more open to outgroups in general, and 
-3. Subjects higher in need for cognition will show larger and longer-lasting effects (this scale was only included on the six week survey, so we view this analysis as more exploratory given that it was not measured pre-treatment).
-
-We found evidence for none of these patterns. In the last subsection we also show evidence of insignificant heterogenous treatment effects for a broader set of covariates.
-
-Note that we present tests for the presence of heterogeneous treatment effects for completeness, but the fact that we fail to find such effects may reflect low power meaning we are unable to reject a false null; the below tests should not be construed as our accepting the null of no difference.
-
-```{r}
+```{r, include=FALSE}
 # Residualized Outcome
 t1 <- subset(data, !is.na(trans.tolerance.dv.t1))
 x.t1 <- t1[,c(t0.covariate.names)]
@@ -315,169 +303,93 @@ write.csv(t1_only, file = "t1_data.csv")
 write.csv(t1, file = "t1.csv")
 ```
 
-```{r}
-ggbarplot(t1, x = "vf_party", y = "trans.tolerance.dv.t0", 
-          add = c("mean_se", "jitter"),
-          color = "vf_party", palette = "jco",
-          position = position_dodge(0.8))
+#### Overall treatment effect by party
 
+```{r,  include = TRUE, eval= TRUE, echo = FALSE}
+party <- data.frame(table(t1$vf_party))
+pander(t(party))
 
-ggbarplot(t1, x = "vf_party", y = "trans.tolerance.dv.t1", 
-          add = c("mean_se", "jitter"),
-          color = "vf_party", palette = "jco",
-          position = position_dodge(0.8))
+ggbarplot(t1, x = "vf_party",
+      y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
+      merge = TRUE,
+      ylab = "trans tolerance", 
+      add = "mean_se", palette = "jco")
 ```
 
+#### Treatment effect py party: placebo vs treatment 
 
-```{r}
-## Summarizes data.
-## Gives count, mean, standard deviation, standard error of the mean, and confidence interval (default 95%).
-##   data: a data frame.
-##   measurevar: the name of a column that contains the variable to be summariezed
-##   groupvars: a vector containing names of columns that contain grouping variables
-##   na.rm: a boolean that indicates whether to ignore NA's
-##   conf.interval: the percent range of the confidence interval (default is 95%)
-summarySE <- function(data=NULL, measurevar, groupvars=NULL, na.rm=FALSE,
-                      conf.interval=.95, .drop=TRUE) {
-    library(plyr)
+```{r, echo = FALSE, warning=FALSE}
+placebo <- subset(t1, treat_ind == 0)
+treat <- subset(t1, treat_ind == 1)
+placebo_party <- data.frame(table(placebo$vf_party))
+treat_party <- data.frame(table(treat$vf_party))
+placebo_treat_party <- cbind(placebo_party, treat_party)
+colnames(placebo_treat_party) <- c("0", "placebo", "1", "treat")
+pander(t(placebo_treat_party))
 
-    # New version of length which can handle NA's: if na.rm==T, don't count them
-    length2 <- function (x, na.rm=FALSE) {
-        if (na.rm) sum(!is.na(x))
-        else       length(x)
-    }
+ggbarplot(placebo, x = "vf_party",
+      y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
+      merge = TRUE,
+      ylab = "trans tolerance", 
+      add = "mean_se", palette = "jco", title = "Placebo group")
 
-    # This does the summary. For each group's data frame, return a vector with
-    # N, mean, and sd
-    datac <- ddply(data, groupvars, .drop=.drop,
-      .fun = function(xx, col) {
-        c(N    = length2(xx[[col]], na.rm=na.rm),
-          mean = mean   (xx[[col]], na.rm=na.rm),
-          sd   = sd     (xx[[col]], na.rm=na.rm)
-        )
-      },
-      measurevar
-    )
-
-    # Rename the "mean" column    
-    datac <- rename(datac, c("mean" = measurevar))
-
-    datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
-
-    # Confidence interval multiplier for standard error
-    # Calculate t-statistic for confidence interval: 
-    # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
-    ciMult <- qt(conf.interval/2 + .5, datac$N-1)
-    datac$ci <- datac$se * ciMult
-
-    return(datac)
-}
-```
-
-
-```{r}
-tol_t0 <- summarySE(t1, measurevar="trans.tolerance.dv.t0", groupvars=c("vf_party"))
-tol_t0
-
-tol_t1 <- summarySE(t1, measurevar="trans.tolerance.dv.t1", groupvars=c("vf_party"))
-tol_t1
+ggbarplot(treat, x = "vf_party",
+      y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
+      merge = TRUE,
+      ylab = "trans tolerance", 
+      add = "mean_se", palette = "jco", title = "Treatment group")
 
 ```
 
 
-```{r, fig.width=8, fig.height=8, warning=FALSE}
-# Estimate the treatment effect for ALL canvassers
-t1.all <- est.ate(data$trans.tolerance.dv.t1)
 
-# Estimate the treatment effect by trans and cis canvassers
-#At 3 day survey
-t1.trans <- est.ate(data$trans.tolerance.dv.t1,
-                    data$canvasser_trans == 1)
-t1.cis <- est.ate(data$trans.tolerance.dv.t1,
-                  data$canvasser_trans == 0)
+#### Overall treatment effect by race
+```{r,  include = TRUE, eval= TRUE, echo = FALSE}
+race <- data.frame(table(t1$vf_racename))
+panderOptions('table.caption.prefix','')
+pander(t(race))
 
+ggbarplot(t1, x = "vf_racename",
+      y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
+      merge = TRUE,
+      ylab = "trans tolerance", 
+      add = "mean_se", palette = "jco")
+```
 
-# Make DF of summary stats
-summary.stats.df <- as.data.frame(rbind(t1.all, 
-                          t1.trans, t1.cis),
-                          stringsAsFactors = FALSE)
+#### Treatment effect py race: placebo vs treatment 
+```{r, echo = FALSE, warning=FALSE}
+placebo_race <- data.frame(table(placebo$vf_racename))
+treat_race <- data.frame(table(treat$vf_racename))
+placebo_treat_race <- cbind(placebo_race, treat_race)
+colnames(placebo_treat_race) <- c("0", "placebo", "1", "treat")
+pander(t(placebo_treat_race))
 
-# Change from strings back to numeric, and remove t- and p-values, which are not used.
-summary.stats.df <- summary.stats.df[,1:2]
-summary.stats.df[,1] <- as.numeric(summary.stats.df[,1])
-summary.stats.df[,2] <- as.numeric(summary.stats.df[,2])
+ggbarplot(placebo, x = "vf_racename",
+      y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
+      merge = TRUE,
+      ylab = "trans tolerance", 
+      add = "mean_se", palette = "jco", title = "Placebo group")
 
-# Better variable names
-names(summary.stats.df) <- c("point.estimate", "se")
-
-# Map row names of summary.stats.df into days
-unique.days <- c(3, 3*7, 6*7, 12*7)
-summary.stats.df$days <- unique.days[as.numeric(substr(row.names(summary.stats.df), 2, 2))]
-
-# Read canvasser group from row names
-canvasser.label.map <- list(all = "All",
-                            tra = "Transgender/Gender\nNon-Conforming Only",
-                            cis = "Non-Transgender Only")
-summary.stats.df$Canvasser <- factor(as.character(
-  canvasser.label.map[substr(row.names(summary.stats.df), 4, 6)]
-  ))
-
-# X position of different canvasser groups
-summary.stats.df$xpos <- with(summary.stats.df, days + as.numeric(Canvasser) -
-                                mean(as.numeric(Canvasser)))
-
-# Point estimate Y
-summary.stats.df$point.estimate.y <- summary.stats.df$point.estimate
-  # Fix text overlap of point estimate labels.
-  summary.stats.df$point.estimate.y[9] <- summary.stats.df$point.estimate.y[9] + .003
-  summary.stats.df$point.estimate.y[3] <- summary.stats.df$point.estimate.y[3] - .003
-
-# Compute CIs
-summary.stats.df$se.high <- summary.stats.df$point.estimate + summary.stats.df$se
-summary.stats.df$se.low <- summary.stats.df$point.estimate - summary.stats.df$se
-summary.stats.df$ci.high <- summary.stats.df$point.estimate + summary.stats.df$se * 1.96
-summary.stats.df$ci.low <- summary.stats.df$point.estimate - summary.stats.df$se * 1.96
-
-summary.stats.df$point.estimate.label <- paste0(round(summary.stats.df$point.estimate,
-                                                      2)," SDs")
-
-g <- ggplot(summary.stats.df,
-            aes(x=xpos, y=point.estimate,
-                group=Canvasser, color=Canvasser)) +
-  theme_classic() +
-  # CIs
-  geom_linerange(aes(ymin=se.low, ymax=se.high), lwd=1) +
-  geom_linerange(aes(ymin=ci.low, ymax=ci.high)) +
-  # Point estimate points
-  geom_point(color="black") +
-  # Point estimate markers
-  annotate("text", label=summary.stats.df$point.estimate.label,
-           x = summary.stats.df$xpos + 6.3,
-           y = summary.stats.df$point.estimate.y,
-           size = 3) +
-  # Canvassing treatment line / label
-  geom_vline(xintercept = 0, linetype = "dashed") +
-  annotate("text", label = "Canvassing Treatment",
-           x = -1.5, y = .3, size = 3.5, angle = 90) +
-  # Day labels
-  annotate("text",
-           label = c("+3 Days", "+3 Weeks", "+6 Weeks", "+3 Months"),
-           x = unique.days, y = -.04,
-           colour = "black", size = 3) +
-  # Y axis
-  ylab("Effect on Transgender Tolerance Scale, in Standard Deviations") + 
-  scale_y_continuous() +
-  # X axis
-  xlab("Days After Canvassing Treatment") +
-  geom_hline(yintercept = 0) +
-  # Overall Title and Legend
-  ggtitle("Differences Between Treatment and Placebo") +
-  guides(fill=FALSE) +
-  theme(legend.position = "bottom")
-ggsave("figure1.pdf", g, width=8, height=6, units="in")
-
+ggbarplot(treat, x = "vf_racename",
+      y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
+      merge = TRUE,
+      ylab = "trans tolerance", 
+      add = "mean_se", palette = "jco", title = "Treatment group")
 
 ```
+
+
+We searched for heterogenous treatment effects by computing a residualized trans.tolerance.dv.t1 among t1 responders (residualizing using the pre-specified covariates but not the treatment indicator) then testing whether the treatment effect on this residualized index was larger for some subgroups. (Residualizing first makes sure the coefficients on the covariates do not differ within subgroups when we compute estimates within subgroups.) In our pre-analysis plan, we specified three predictions about treatment effect heterogeneity by subject attributes:
+
+1. Democrats will be more treatment-responsive than Republicans as a result of partisan cues being more aligned, 
+2. Subjects higher on the baseline support scale will be more treatment-responsive as a result of being more open to outgroups in general, and 
+3. Subjects higher in need for cognition will show larger and longer-lasting effects (this scale was only included on the six week survey, so we view this analysis as more exploratory given that it was not measured pre-treatment).
+
+We found evidence for none of these patterns. In the last subsection we also show evidence of insignificant heterogenous treatment effects for a broader set of covariates.
+
+Note that we present tests for the presence of heterogeneous treatment effects for completeness, but the fact that we fail to find such effects may reflect low power meaning we are unable to reject a false null; the below tests should not be construed as our accepting the null of no difference.
+
+
 #### By Party Registration
 We analyze the data two ways. In Table S6, we present the conditional average treatment effect among Democrats, Independents, and Republicans on the trans.tolerance.dv.t1 factor. In Table S7, we present the interaction effect between binary variables for Democrats and Independents and the treatment indicator on the same factor (making Republicans the base category), after having been residualized on the above specified covariates. We find no evidence of heterogeneous treatment effects. (The only hint of a pattern is that Republicans are more affected than Independents.)
 
@@ -512,7 +424,7 @@ We analyze the data two ways. In Table S8, we present the conditional average tr
 
 Note that the correlation between the baseline and the outcome is weak because we compute heterogenous treatment effects on a residualized version of the outcome.
 **Table S8.**
-```{r, eval=TRUE}
+```{r, eval=TRUE, echo=FALSE}
 base.low <- data.frame(
   est.ate(data$trans.tolerance.dv.t1,
           data$scale_for_blocking_t0 < mean(data$scale_for_blocking_t0, na.rm = TRUE)))
@@ -528,7 +440,8 @@ pander(t(base))
 
 
 **Table S9.**
-```{r, eval=TRUE}
+Compute heterogenous treatment effects on a residualized version of the outcome
+```{r, eval=FALSE, echo = FALSE}
 baseline.interact <- summary(lm(t1$t1.resid ~ t1$treat_ind * t1$scale_for_blocking_t0))$coefficients
 rownames(baseline.interact) <- c("Intercept", "Treat", "Democrat", "Baseline X Treat")
 colnames(baseline.interact) <- c("Estimate", "Std. Error", "*t*", "*p*")
@@ -538,7 +451,8 @@ pander(baseline.interact)
 ```
 
 **Table S9b.**
-```{r, eval=TRUE}
+Compute heterogenous treatment effects on the outcome
+```{r, eval=TRUE, echo = FALSE}
 baseline.interact <- summary(lm(t1$trans.tolerance.dv.t1 ~ t1$treat_ind * t1$scale_for_blocking_t0))$coefficients
 rownames(baseline.interact) <- c("Intercept", "Treat", "Democrat", "Baseline X Treat")
 colnames(baseline.interact) <- c("Estimate", "Std. Error", "*t*", "*p*")
@@ -555,7 +469,7 @@ Recall that the Need for Cognition item was only asked on the third post-treatme
 
 
 **Table S10.**
-```{r, eval=TRUE, echo=TRUE}
+```{r, eval=TRUE, echo=FALSE}
 nfc.low <- data.frame(
   est.ate(data$trans.tolerance.dv.t1, data$nfc_t3 < mean(data$nfc_t3, na.rm = TRUE)))
 nfc.high <- data.frame(
@@ -569,7 +483,7 @@ pander(t(nfc))
 
 
 **Table S11.**
-```{r, eval=TRUE, echo=TRUE}
+```{r, eval=TRUE, echo=FALSE}
 nfc.interact <- summary(lm(t1$t1.resid ~ t1$treat_ind * t1$nfc_t3))$coefficients
 rownames(nfc.interact) <- c("Intercept", "Treat", "NFC", "NFCxTreat")
 colnames(nfc.interact) <- c("Estimate", "Std. Error", "*t*", "*p*")
@@ -581,25 +495,10 @@ pander(nfc.interact)
 
 
 
-#### Same sex marriage support  --- adding 
-
-
-**Table S12.**
-```{r, eval=TRUE, echo=TRUE}
-ssm.low <- data.frame(
-  est.ate(data$trans.tolerance.dv.t1, data$ssm_t0 < mean(data$ssm_t0, na.rm = TRUE)))
-ssm.high <- data.frame(
-  est.ate(data$trans.tolerance.dv.t1, data$ssm_t0 >= mean(data$ssm_t0, na.rm = TRUE)))
-ssm <- cbind(ssm.low, ssm.high)
-colnames(ssm) <- c("Low SSM", "High SSM")
-panderOptions('table.caption.prefix','')
-set.caption("Effects at 3 Days by Same Sex Marriage support, separately. Linear regression with clustered standard errors.")
-pander(t(ssm))
-```
-
-
+#### Same sex marriage support
 **Table S13a.**
-```{r, eval=TRUE}
+Compute heterogenous treatment effects on a residualized version of the outcome
+```{r, eval=TRUE, echo=FALSE}
 ssm.interact <- summary(lm(t1$t1.resid ~ t1$treat_ind * t1$ssm_t0))$coefficients
 rownames(ssm.interact) <- c("Intercept", "Treatment", "SSM", "SSM x Treat")
 colnames(ssm.interact) <- c("Estimate", "Std. Error", "*t*", "*p*")
@@ -610,7 +509,8 @@ pander(ssm.interact)
 
 
 **Table S13b.**
-```{r, eval=TRUE}
+Compute heterogenous treatment effects on the outcome
+```{r, eval=TRUE, echo=FALSE}
 ssm.interact <- summary(lm(t1$trans.tolerance.dv.t1 ~ t1$treat_ind * t1$ssm_t0))$coefficients
 rownames(ssm.interact) <- c("Intercept", "Treatment", "SSM", "SSM x Treat")
 colnames(ssm.interact) <- c("Estimate", "Std. Error", "*t*", "*p*")
@@ -706,9 +606,9 @@ cates <- map("treat_ind", function(level) {
   xls <- hte::X_RF(feat = X_train,
                    tr = W_train,
                    yobs = Y_train,
-                   ntree_first = 500,
-                   ntree_second = 500,
-                   ntree_prop = 500,
+                   ntree_first = 200,
+                   ntree_second = 200,
+                   ntree_prop = 200,
                    nthread = 1,
                    min_node_size_spl_first = 1,
                    min_node_size_ave_first = 1,
@@ -755,8 +655,6 @@ walk2(cates, names(cates), function(data_with_cate, title) {
 })
 ```
 
-
-Significant contexts:
 
 - gender_norm_looks_t0: To keep children from being confused, it’s better when men look and act like men, and women look and act like women.
 - gender_norms_moral_t0: It is morally wrong for a man to present himself as a woman in public
