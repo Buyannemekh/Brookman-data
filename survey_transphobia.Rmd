@@ -1,0 +1,988 @@
+---
+title: "survey_transphobia"
+author: "Buyannemekh Munkhbat"
+date: "11/5/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+rm(list = ls())
+library(foreign)
+library(pander)
+library(plyr)
+library(sandwich)
+library(lmtest)
+library(data.table)
+library(ggplot2)
+library(reshape2)
+library(glmnet)
+library(memoutils)
+library(dplyr)
+library(purrr)
+
+
+library(devtools)
+library(tidyverse)
+library(rprojroot)
+
+library(kableExtra)
+library(knitr)
+library(tibble)
+library(magrittr)
+library(aod)
+library(broom)
+library(grid)
+library(gridExtra)
+
+library(ggpubr)
+library(ggplot2)
+wd <- '' # enter your working directory here
+set.seed(5953921)
+
+data <- read.dta(paste0(wd, 'broockman_kalla_replication_data.dta'))
+# Note: Variables that begin with vf_ come from the voter file.
+# Variables that end with _t0 were collected on the baseline survey.
+```
+
+### Pre-Specified Index of All Primary Outcomes
+
+In the pre-analysis plan we indicated that the main hypothesis test will be whether an index of all primary outcomes shows statistical significance. We list these outcomes for each survey below. (In the pre-analysis plan we called this "main.dv.")
+
+Note that we code the scale such that larger, more positive values indicate more tolerance and less prejudice.
+
+```{r}
+all.dv.names.t1 <- c('miami_trans_law_t1', 'miami_trans_law2_t1', 'therm_trans_t1',
+                      'gender_norm_sexchange_t1', 'gender_norm_moral_t1',
+                      'gender_norm_abnormal_t1', 'gender_norm_trans_moral_wrong_t1')
+```
+
+#### Transgender Tolerance Index
+
+```{r}
+trans.tolerance.dvs.t0 <- c('therm_trans_t0', 'gender_norms_sexchange_t0',
+                            'gender_norms_moral_t0', 'gender_norms_abnormal_t0')
+
+trans.tolerance.dvs.t1 <- c('therm_trans_t1', 'gender_norm_sexchange_t1',
+                            'gender_norm_moral_t1', 'gender_norm_abnormal_t1',
+                            'gender_norm_trans_moral_wrong_t1')
+```
+
+#### Law Items Index
+```{r}
+trans.law.dvs.t0 <- c('miami_trans_law_t0', 'miami_trans_law2_t0')
+trans.law.dvs.t1 <- c('miami_trans_law_t1', 'miami_trans_law2_t1')
+```
+
+#### Secondary Outcome: Gender Non-Conformity Index
+```{r}
+gender.nonconformity.t0 <- c('gender_norm_looks_t0', 'gender_norm_rights_t0')
+gender.nonconformity.t1 <- c('gender_norm_looks_t1', 'gender_norm_rights_t1')
+```
+
+```{r, include = FALSE}
+### Reverse Coded Items
+
+reverse.coded.items <- c('gender_norms_moral_t0', 'gender_norm_moral_t1',
+                         'gender_norm_moral_t2', 'gender_norm_moral_t3',
+                         'gender_norm_moral_t4', 'gender_norms_abnormal_t0',
+                         'gender_norm_abnormal_t1', 'gender_norm_abnormal_t2',
+                         'gender_norm_abnormal_t3','gender_norm_abnormal_t4',
+                         'gender_norm_trans_moral_wrong_t1', 
+                         'gender_norm_trans_moral_wrong_t2',
+                         'gender_norm_trans_moral_wrong_t3',
+                         'gender_norm_trans_moral_wrong_t4',
+                         'trans_bathroom_t2', 'trans_bathroom_t3',
+                         'trans_bathroom_t4', 'gender_norm_looks_t0',
+                         'gender_norm_looks_t1', 'gender_norm_looks_t2',
+                         'gender_norm_looks_t3', 'gender_norm_looks_t4',
+                         'gender_norm_rights_t0', 'gender_norm_rights_t1',
+                         'gender_norm_rights_t2', 'gender_norm_rights_t3',
+                         'gender_norm_rights_t4', 'gender_norm_dress_t2',
+                         'gender_norm_dress_t3', 'gender_norm_dress_t4')
+for(item in reverse.coded.items) data[,item] <- -1 * data[,item]
+```
+
+```{r, include = FALSE}
+### Procedue for Combining Outcomes into Indices
+
+# Compute factor analysis outcome
+compute.factor.dv <- function(dv.names, respondent.booleans, print.loadings = TRUE){
+  responders <- data[respondent.booleans,]
+  
+  # Factor analysis
+  factor.obj <- princomp(responders[, dv.names], cor=TRUE)
+  if(print.loadings) print(loadings(factor.obj))
+  dv <- as.vector(factor.obj$scores[,1])
+  
+  # More positive values on the factor should indicate more tolerance; reverse otherwise.
+  if(cor(dv, responders$miami_trans_law_t0, use="complete.obs") < 0) dv <- -1 * dv
+  
+  # Put in the order of the main data frame
+  dv.in.order <- dv[match(data$id, responders$id)]
+  
+  # Rescale to mean 0 sd 1 in placebo group; treatment effects can then be interpreted
+  # as the effect in standard deviations the treatment would have among an untreated
+  # population.
+  dv.in.order <- (dv.in.order - mean(dv.in.order[!data$treat_ind], na.rm=TRUE)) /
+    sd(dv.in.order[!data$treat_ind], na.rm=TRUE)
+  
+  return(as.vector(dv.in.order))
+}
+```
+
+```{r, include = FALSE}
+# In this code section we implement the procedures describe previously.
+
+# First, misc. housekeeping.
+# Recode age for small number of observations where it is missing.
+data$vf_age[which(is.na(data$vf_age))] <- mean(data$vf_age, na.rm=TRUE)
+
+# Language of interview
+data$survey_language_es[is.na(data$survey_language_es)] <-
+    data$survey_language_t0[is.na(data$survey_language_es)] == "ES"
+data$survey_language_es[is.na(data$survey_language_es)] <- mean(data$survey_language_es, na.rm = TRUE)
+
+# We subset to only those who came to door. contacted = came to door.
+full.data <- data
+data <- subset(data, contacted == 1)
+
+# Compute the DVs in line with the above procedures.
+
+# Omnibus DV of all primary outcomes.
+data$all.dvs.t1 <- compute.factor.dv(all.dv.names.t1, data$respondent_t1==1 & !is.na(data$respondent_t1))
+
+
+# Trans tolerance DV.
+data$trans.tolerance.dv.t0 <- compute.factor.dv(trans.tolerance.dvs.t0, data$respondent_t0==1 & !is.na(data$respondent_t0))
+data$trans.tolerance.dv.t1 <- compute.factor.dv(trans.tolerance.dvs.t1, data$respondent_t1==1 & !is.na(data$respondent_t1))
+
+
+# Law DV.
+# Create outcome scale by averaging over the two questions.
+data$miami_trans_law_t0_avg <- (data$miami_trans_law_t0 + data$miami_trans_law2_t0)/2
+data$miami_trans_law_t1_avg <- (data$miami_trans_law_t1 + data$miami_trans_law2_t1)/2
+
+
+# Gender Non-Conformity DV
+data$gender_nonconformity_t0 <- compute.factor.dv(gender.nonconformity.t0, data$respondent_t0==1 & !is.na(data$respondent_t0))
+data$gender_nonconformity_t1 <- compute.factor.dv(gender.nonconformity.t1, data$respondent_t1==1 & !is.na(data$respondent_t1))
+```
+
+```{r, include = FALSE}
+## Estimation Procedures
+### Contact Rate
+
+# This dummy records whether the intervention was actually delivered vs. was not for any reason.
+# Note that we do not use this variable to conduct comparisons only to measure successful contact rates.
+data$treatment.delivered <- data$exp_actual_convo == "Trans-Equality" & !is.na(data$canvass_trans_ratingstart)
+```
+
+## Complier Average Causal Effect Estimation
+To estimate complier average causal effects, we rely on ordinary least squares (OLS) with cluster-robust standard errors, clustering on household and residualizing using pre-treatment covariates from the baseline survey and voter list. This procedure and these covariates were pre-specified in advance and produce unbiased estimates of causal effects (*33*). We also adjust for the contact rate, as described above. Finally, we implement Olken's rejection rule (*43*) as specified in our pre-analysis plan, which denoted the bottom 1\% and top 4\% of the sampling distribution as the rejection region (instead of either the bottom 2.5\% and top 2.5\% or only top 5\% as is conventional). We report p-values for this region and otherwise report "n.s." (*43*). (The only result this rule affects is the 3-month effect on the law index.)
+
+```{r, include=FALSE}
+t0.covariate.names <- c('miami_trans_law_t0', 'miami_trans_law2_t0', 'therm_trans_t0', 
+'gender_norms_sexchange_t0', 'gender_norms_moral_t0', 'gender_norms_abnormal_t0',
+'ssm_t0', 'therm_obama_t0', 'therm_gay_t0','vf_democrat', 'ideology_t0', 
+'religious_t0', 'exposure_gay_t0', 'exposure_trans_t0', 'pid_t0', 'sdo_scale',
+'gender_norm_daugher_t0', 'gender_norm_looks_t0', 
+'gender_norm_rights_t0', 'therm_afams_t0', 'vf_female', 'vf_hispanic',
+'vf_black', 'vf_age', 'survey_language_es', 'cluster_level_t0_scale_mean')
+x <- data[,c(t0.covariate.names)]
+x <- as.matrix(x, dimnames = list(NULL, names(x)))
+
+# Function to compute clustered standard errors, from Mahmood Arai.
+cl <- function(fm, cluster){
+  M <- length(unique(cluster))
+  N <- length(cluster)
+  K <- fm$rank
+  dfc <- (M/(M-1))*((N-1)/(N-K))
+  uj  <- apply(estfun(fm), 2, function(x) tapply(x, cluster, sum))
+  vcovCL <- dfc*sandwich(fm, meat=crossprod(uj)/N)
+  coeftest(fm, vcovCL)
+}
+
+# Function to extract the average treatment effect from OLS with clustered SEs.
+est.ate <- function(dv, include.obs = NULL, include.covariates = TRUE){
+  if(is.null(include.obs)){
+    include.obs <- !is.na(dv) 
+  }
+  include.obs <- which(include.obs & !is.na(dv))
+  
+  if(include.covariates) lm.obj <- lm(dv[include.obs] ~ data$treat_ind[include.obs] +
+                                        x[include.obs,])
+  if(!include.covariates) lm.obj <- lm(dv[include.obs] ~ data$treat_ind[include.obs])
+  
+  # Calculate cluster-robust standard errors.
+  result <- cl(lm.obj, data$hh_id[include.obs])[2,]
+  
+  # Adjust point estimate and standard error for contact rate in subsample.
+  itt_d <- lm(treatment.delivered ~ treat_ind, data[include.obs,])$coefficients[2]
+  result[1:2] <- result[1:2] / itt_d
+  
+  # Per pre-analysis plan, rejection region is top 4% and bottom 1% of sampling distribution,
+  # so p-values are reported for this region; otherwise, we write "n.s."
+  # See Olken (*43*) , page 70, footnote 5.
+  # Note that cl() returns two-tailed p-values that must be converted to one-tailed.
+  # Note that all DVs were recoded such that higher values indicated more tolerance.
+  result[4] <- result[4] / 2 # p-value corresponds to mass under one side of distribution.
+  rejection.region <- ((result[4] < .04 & result[1] > 0) | # Significant positive result.
+                         (result[4] < .01 & result[1] < 0)) # Significant negative result.
+  result <- round(result, 3)
+  if(rejection.region) result[4] <- paste0(as.character(result[4]), "*")
+  if(!rejection.region) result[4] <- "*n.s.*"
+  if(result[4] == "0*") result[4] <- "0.000*" # Indicate precision of 0 p-value.
+  names(result)[4] <- "*p*"
+  return(result)
+}
+```
+
+
+## Heterogenous Treatment Effects
+```{r, include=FALSE}
+# Residualized Outcome
+t1 <- subset(data, !is.na(trans.tolerance.dv.t1))
+x.t1 <- t1[,c(t0.covariate.names)]
+x.t1 <- as.matrix(x.t1, dimnames = list(NULL, names(x.t1)))
+t1$t1.resid <- summary(lm(t1$trans.tolerance.dv.t1 ~ x.t1))$residuals
+write.csv(t1, file = "t1.csv")
+```
+
+
+### Party: placebo vs treatment 
+```{r, echo = FALSE}
+# Replacing word with number in exp_actual_convo 
+t1[t1$exp_actual_convo == "Recycling",]$exp_actual_convo = 0
+t1[t1$exp_actual_convo == "Trans-Equality",]$exp_actual_convo = 1
+t1$exp_actual_convo <- as.numeric(as.character(t1$exp_actual_convo))
+```
+
+
+```{r, echo = FALSE, warning=FALSE}
+# placebo <- subset(t1, treat_ind == 0)
+# treat <- subset(t1, treat_ind == 1)
+
+placebo <- subset(t1, exp_actual_convo == 0)
+treat <- subset(t1, exp_actual_convo == 1)
+```
+
+
+```{r, echo = FALSE, warning=FALSE}
+placebo_party <- data.frame(table(placebo$vf_party))
+treat_party <- data.frame(table(treat$vf_party))
+
+placebo_treat_party <- merge(x = placebo_party , y = treat_party, by = "Var1", all.x = TRUE)
+colnames(placebo_treat_party) <- c("Party", "Placebo", "Treatment")
+panderOptions('table.caption.prefix','')
+pretty_table(t(placebo_treat_party))
+
+treat_non_other <- subset(treat, treat$vf_party != "Other Party")
+placebo_non_other <- subset(placebo, placebo$vf_party != "Other Party")
+
+require(gridExtra)
+
+plot1 <- ggboxplot(placebo_non_other, x = "vf_party",
+      y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
+      merge = TRUE,
+      ylab = "trans tolerance", 
+      palette = "jco", title = "Placebo group")
+
+plot2 <- ggboxplot(treat_non_other, x = "vf_party",
+      y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
+      merge = TRUE,
+      ylab = "trans tolerance", 
+      palette = "jco", title = "Treatment group")
+
+grid.arrange(plot1, plot2, ncol=2)
+
+```
+
+**Table S7.**
+```{r, eval=TRUE}
+pid.interact <- summary(lm(t1$t1.resid ~ t1$treat_ind * t1$vf_democrat + t1$treat_ind * t1$vf_independent))$coefficients
+rownames(pid.interact) <- c("Intercept", "Treatment", "Democrat", "Independent", "Democrat x Treat", "Independent X Treat")
+colnames(pid.interact) <- c("Estimate", "Std. Error", "*t*", "*p*")
+panderOptions('table.caption.prefix','')
+set.caption("Effects at 3 Days by Party Registration, Interaction Term. Linear regression with clustered standard errors.")
+pander(pid.interact)
+```
+
+
+
+### Canvasser: placebo vs treatment 
+```{r, echo = FALSE, warning=FALSE}
+placebo_canvas_table <- data.frame(table(placebo$canvasser_trans))
+treat_canvas_table <- data.frame(table(treat$canvasser_trans))
+
+placebo_treat_canvas <- merge(placebo_canvas_table, treat_canvas_table, by = "Var1", all.x = TRUE)
+colnames(placebo_treat_canvas) <- c("Canvasser Trans", "Placebo", "Treat")
+panderOptions('table.caption.prefix','')
+pretty_table(t(placebo_treat_canvas))
+
+placebo_canvas <- subset(placebo, !is.na(canvasser_trans))
+treat_canvas <- subset(treat, !is.na(canvasser_trans))
+
+p <- ggboxplot(placebo_canvas, x = "canvasser_trans",
+      y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
+      merge = TRUE,
+      ylab = "trans tolerance", 
+      palette = "jco", title = "Placebo group")
+p <- p + stat_compare_means()
+
+
+t <- ggboxplot(treat_canvas, x = "canvasser_trans",
+      y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
+      merge = TRUE,
+      ylab = "trans tolerance", 
+      palette = "jco", title = "Treatment group")
+t <- t + stat_compare_means()
+
+grid.arrange(p, t, ncol = 2)
+
+```
+
+
+**Table S8a.**
+```{r, eval=TRUE}
+pid.interact <- summary(lm(t1$t1.resid ~ t1$treat_ind * t1$canvasser_trans))$coefficients
+rownames(pid.interact) <- c("Intercept", "Treat", "Canvasser Trans", "Canvasser Trans x Treat")
+colnames(pid.interact) <- c("Estimate", "Std. Error", "*t*", "*p*")
+panderOptions('table.caption.prefix','')
+set.caption("Effects at 3 Days by Party Registration, Interaction Term. Linear regression with clustered standard errors.")
+pander(pid.interact)
+```
+
+
+### Race: placebo vs treatment 
+```{r, echo = FALSE, warning=FALSE}
+placebo_race <- data.frame(table(placebo$vf_racename))
+treat_race <- data.frame(table(treat$vf_racename))
+
+placebo_treat_race <- merge(placebo_race, treat_race,  by = "Var1", all.x = TRUE)
+colnames(placebo_treat_race) <- c("Race", "Placebo", "Treat")
+pretty_table(t(placebo_treat_race))
+
+
+placebo_non_asian <- subset(placebo, placebo$vf_racename != "Asian")
+treat_non_asian <- subset(treat, treat$vf_racename != "Asian")
+require(gridExtra)
+
+plot1 <- ggboxplot(placebo_non_asian, x = "vf_racename",
+      y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
+      merge = TRUE,
+      ylab = "trans tolerance", 
+      palette = "jco", title = "Placebo group")
+
+plot2 <- ggboxplot(treat_non_asian, x = "vf_racename",
+      y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
+      merge = TRUE,
+      ylab = "trans tolerance", 
+      palette = "jco", title = "Treatment group")
+
+grid.arrange(plot1, plot2, ncol=2)
+```
+
+
+**Table S14.**
+```{r, eval=TRUE, echo=FALSE}
+
+white <- data.frame(est.ate(data$trans.tolerance.dv.t1, data$vf_white == 1))
+hisp <- data.frame(est.ate(data$trans.tolerance.dv.t1, data$vf_hispanic == 1))
+black <- data.frame(est.ate(data$trans.tolerance.dv.t1, data$vf_black == 1))
+white.h.b <- cbind(white, hisp, black)
+colnames(white.h.b) <- c("white", "hisp", "black")
+panderOptions('table.caption.prefix','')
+set.caption("Effects at 3 Days by Race Registration, separately. Linear regression with clustered standard errors.")
+pander(t(white.h.b))
+```
+
+
+**Table S15a.**
+```{r, eval=TRUE, echo=FALSE}
+pid.interact <- summary(lm(t1$t1.resid ~ t1$treat_ind * t1$vf_white + t1$treat_ind * t1$vf_hispanic + t1$treat_ind * t1$vf_black))$coefficients
+rownames(pid.interact) <- c("Intercept", "Treatment", "White", "Hisp", "Black", "White x Treat", "Hisp X Treat", "Black X Treat")
+colnames(pid.interact) <- c("Estimate", "Std. Error", "*t*", "*p*")
+panderOptions('table.caption.prefix','')
+set.caption("Effects at 3 Days by Race Registration, Interaction Term. Linear regression with clustered standard errors.")
+pander(pid.interact)
+```
+
+
+**Table S15b.**
+```{r, eval=TRUE, echo=FALSE}
+
+pid.interact <- summary(lm(t1$t1.resid ~ t1$treat_ind * t1$vf_black))$coefficients
+
+rownames(pid.interact) <- c("Intercept", "Treatment", "Black", "Black X Treat")
+colnames(pid.interact) <- c("Estimate", "Std. Error", "*t*", "*p*")
+panderOptions('table.caption.prefix','')
+set.caption("Effects at 3 Days by Race Registration, Interaction Term. Linear regression with clustered standard errors.")
+pander(pid.interact)
+```
+
+
+**Table S15c.**
+```{r, eval=TRUE, echo=FALSE}
+
+pid.interact <- summary(lm(t1$t1.resid ~ t1$treat_ind * t1$vf_white))$coefficients
+
+rownames(pid.interact) <- c("Intercept", "Treatment", "White", "White X Treat")
+colnames(pid.interact) <- c("Estimate", "Std. Error", "*t*", "*p*")
+panderOptions('table.caption.prefix','')
+set.caption("Effects at 3 Days by Race Registration, Interaction Term. Linear regression with clustered standard errors.")
+pander(pid.interact)
+```
+
+
+### Canvasser and racename in Treatment group
+(excluding Asians since there were only 3 in total) 
+
+```{r,  include = TRUE, eval= TRUE, echo = FALSE}
+afam <- subset(treat_canvas, treat_canvas$vf_racename == "African American")
+hispanic <- subset(treat_canvas, treat_canvas$vf_racename == "Hispanic")
+caucasian <- subset(treat_canvas, treat_canvas$vf_racename == "Caucasian")
+
+afam_table <- data.frame(table(afam$canvasser_trans))
+hispanic_table <- data.frame(table(hispanic$canvasser_trans))
+caucasian_table <- data.frame(table(caucasian$canvasser_trans))
+
+treat_race_canvas <- merge(afam_table, hispanic_table, by="Var1")
+treat_race_canvas <- merge(treat_race_canvas, caucasian_table, by="Var1")
+colnames(treat_race_canvas) <- c("Canvasser Trans", "African American", "Hispanic", "Caucasian")
+set.caption("Number of transgender canvassers in each race group after dropping Asian")
+pander((treat_race_canvas))
+
+```
+
+
+```{r,echo = FALSE}
+
+treat_canvas <- subset(treat_canvas, treat_canvas$vf_racename != "Asian")
+
+t.t0 <- ggboxplot(treat_canvas, x = "canvasser_trans", y = "trans.tolerance.dv.t0",
+              color = "canvasser_trans", palette = "npg",
+              add = "jitter",
+              facet.by = "vf_racename", short.panel.labs = FALSE, title = "Pre-treamtment")
+# Use only p.format as label. Remove method name.
+t.t0 + stat_compare_means(
+ aes(label = paste0("p = ", ..p.format..))
+)
+
+t.t1 <- ggboxplot(treat_canvas, x = "canvasser_trans", y = "trans.tolerance.dv.t1",
+              color = "canvasser_trans", palette = "npg",
+              add = "jitter",
+              facet.by = "vf_racename", short.panel.labs = FALSE, title = "Post-treatment")
+# Use only p.format as label. Remove method name.
+t.t1 + stat_compare_means(
+ aes(label = paste0("p = ", ..p.format..))
+)
+
+
+t_afam <- ggboxplot(afam, x = "canvasser_trans",
+      y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
+      merge = TRUE,
+      ylab = "trans tolerance", 
+      palette = "jco", title = "African American: Treatment group")
+t_afam <- t_afam + stat_compare_means()
+
+
+
+t_hisp <- ggboxplot(hispanic, x = "canvasser_trans",
+      y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
+      merge = TRUE,
+      ylab = "trans tolerance", 
+      palette = "jco", title = "Hispanic: Treatment group")
+t_hisp <- t_hisp + stat_compare_means()
+
+
+t_cau <- ggboxplot(caucasian, x = "canvasser_trans",
+      y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
+      merge = TRUE,
+      ylab = "trans tolerance", 
+      palette = "jco", title = "Caucasian: Treatment group")
+t_cau <- t_cau + stat_compare_means()
+
+grid.arrange(t_afam, t_hisp, t_cau, ncol = 3 )
+```
+
+
+## Descriptive memo 
+Cleaning data for analyses on only on t1. Therefore removing other columns that are relavant for t2, t3 and t4. 
+
+```{r}
+# Removing all results of t2 (3 week), t3 (6 week) and t4 (3 month) 
+t1_results <- t1[, -which(grepl('t2|t3|t4', names(t1)))]
+
+# Pre-specified index of all primary outcomes at t0
+all.dv.names.t0 <- c('miami_trans_law_t0', 'miami_trans_law2_t0', 'therm_trans_t0',
+                      'gender_norms_sexchange_t0', 'gender_norms_moral_t0',
+                      'gender_norms_abnormal_t0', 'gender_norm_trans_moral_wrong_t0')
+
+# Remove primary outcomes at t0 and t1
+t1_related <- t1_results[ , !(names(t1_results) %in% all.dv.names.t1)]
+t1_related <- t1_related[ , !(names(t1_related) %in% all.dv.names.t0)]
+
+# Remove gender non-conformity index at t0 and t1 since they used for
+t1_related <- t1_related[ , !(names(t1_related) %in% gender.nonconformity.t0)]
+t1_related <- t1_related[ , !(names(t1_related) %in% gender.nonconformity.t1)]
+
+# Remove categorical variables 
+t1_related <- t1_related[, -which(grepl('vf_racename|vf_party', names(t1_related)))]
+
+# Remove identifiers
+identifiers <- c('id', 'block_ind', 'hh_id', 'canvasser_id')
+t1_related <- t1_related[ , !(names(t1_related) %in% identifiers)]
+
+# Remove contacted or responded (as they are all ones in this case)
+tracking <- c('respondent_t0', 'respondent_t1', 'contacted')
+t1_related <- t1_related[ , !(names(t1_related) %in% tracking)]
+
+# Remove index that are directly related to the survey 
+survey_method <- c('scale_for_blocking_t0', 'cluster_level_t0_scale_mean','survey_language_t0', 'survey_language_es')
+t1_related <- t1_related[ , !(names(t1_related) %in% survey_method)]
+
+# Remove t1 s except trans.tolerance.dv.t1 and marijuana
+t1_related <- t1_related[, -which(grepl('_t1|marijuana', names(t1_related)))]
+
+
+# Removing treat_ind because it is assigned treatment and actual treatment is in exp_actual_convo
+t1_related <- t1_related[, -which(grepl('treat_ind', names(t1_related)))]
+
+# Remove canvas experience and rating
+canvasser_info = c("canvass_recycling_rating","canvass_trans_ratingstart","canvass_trans_ratingsecond",
+                   "canvass_trans_ratingend", "canvass_minutes","canvasser_experience")
+t1_related <- t1_related[ , !(names(t1_related) %in% canvasser_info)]
+
+```
+
+```{r}
+t1_related <- subset(t1_related, !is.na(t1_related$canvasser_trans))
+df_split_trans <- modelr::resample_partition(t1_related, c(train=0.5, estim=0.5))
+df_train_trans <- dplyr::as_tibble(df_split_trans$train)
+df_est_trans<- dplyr::as_tibble(df_split_trans$estim)
+
+outcome <- "trans.tolerance.dv.t1"
+outcome_resid <- "t1.resid"
+treatment <- "exp_actual_convo"
+contexts <- colnames(t1_related)[1:24]
+contexts <- contexts[contexts != treatment]
+```
+
+
+### Summarize context variables
+
+```{r, results="asis", message=FALSE, echo=FALSE}
+summarize_contexts(t1_related[c(outcome, contexts)])
+```
+
+## X-learners
+
+### outcome = "trans.tolerance.dv.t1"
+
+```{r, echo = FALSE}
+cates <- map("exp_actual_convo", function(level) {
+
+  X_train <- as.data.frame(df_train_trans[contexts])
+  W_train <- pull(df_train_trans, level)
+  Y_train <- pull(df_train_trans, outcome)
+  X_test <-  as.data.frame(df_est_trans[contexts])
+  xls <- hte::X_RF(feat = X_train,
+                   tr = W_train,
+                   yobs = Y_train,
+                   ntree_first = 500,
+                   ntree_second = 500,
+                   ntree_prop = 500,
+                   nthread = 1,
+                   min_node_size_spl_first = 1,
+                   min_node_size_ave_first = 1,
+                   min_node_size_spl_second = 1,
+                   min_node_size_ave_second = 1,
+                   min_node_size_spl_prop = 1, 
+                   min_node_size_ave_prop = 1)
+  
+  cate <- hte::EstimateCate(xls, X_test) %>% as_tibble() %>% rename(cate=value)
+  
+  data_with_cate <- bind_cols(df_est_trans, cate)
+
+})
+
+names(cates) <- "exp_actual_convo"
+```
+
+
+```{r, results="asis", message=FALSE, eval=TRUE,  echo = FALSE}
+# Prints html table
+walk2(cates, names(cates), function(data_with_cate, title) {
+    # overall title
+  Leaf_title <- str_c("\n<h4> ", title," </h4>\n")
+  cat(Leaf_title)
+  
+  # Computes the ntiles of the "cate" column
+  data_with_ntiles <- add_ntiles(data_with_cate, ntiles=5)
+  
+  # Multiple hyp. testing for context means given factor(ntiles). Keeps if at least 1 significant
+  significant_contexts <- keep(contexts, ~has_significant(data_with_ntiles, ., "cate_ntile"))
+  
+  # Creates a table based on tile
+  tab <- summarize_by_prediction_ntile(data=data_with_ntiles,
+                                       covariates=significant_contexts,
+                                       ntiles=5)
+  
+  # Prettyprint with HTML+Boostrap
+  html <- pretty_table(tab, digits=2, title=title, prefix="Q")
+  
+  cat(html)
+  
+})
+```
+
+
+### outcome = "t1.resid"
+
+```{r, echo = FALSE}
+cates <- map("exp_actual_convo", function(level) {
+
+  X_train <- as.data.frame(df_train_trans[contexts])
+  W_train <- pull(df_train_trans, level)
+  Y_train <- pull(df_train_trans, outcome_resid)
+  X_test <-  as.data.frame(df_est_trans[contexts])
+  xls <- hte::X_RF(feat = X_train,
+                   tr = W_train,
+                   yobs = Y_train,
+                   ntree_first = 500,
+                   ntree_second = 500,
+                   ntree_prop = 500,
+                   nthread = 1,
+                   min_node_size_spl_first = 1,
+                   min_node_size_ave_first = 1,
+                   min_node_size_spl_second = 1,
+                   min_node_size_ave_second = 1,
+                   min_node_size_spl_prop = 1, 
+                   min_node_size_ave_prop = 1)
+  
+  cate <- hte::EstimateCate(xls, X_test) %>% as_tibble() %>% rename(cate=value)
+  
+  data_with_cate <- bind_cols(df_est_trans, cate)
+
+})
+
+names(cates) <- "exp_actual_convo"
+```
+
+
+```{r, results="asis", message=FALSE, eval=TRUE,  echo = FALSE}
+# Prints html table
+walk2(cates, names(cates), function(data_with_cate, title) {
+    # overall title
+  Leaf_title <- str_c("\n<h4> ", title," </h4>\n")
+  cat(Leaf_title)
+  
+  # Computes the ntiles of the "cate" column
+  data_with_ntiles <- add_ntiles(data_with_cate, ntiles=5)
+  
+  # Multiple hyp. testing for context means given factor(ntiles). Keeps if at least 1 significant
+  significant_contexts <- keep(contexts, ~has_significant(data_with_ntiles, ., "cate_ntile"))
+  
+  # Creates a table based on tile
+  tab <- summarize_by_prediction_ntile(data=data_with_ntiles,
+                                       covariates=significant_contexts,
+                                       ntiles=5)
+  
+  # Prettyprint with HTML+Boostrap
+  html <- pretty_table(tab, digits=2, title=title, prefix="Q")
+  
+  cat(html)
+  
+})
+```
+
+
+## Post-lasso
+```{r, echo = FALSE}
+ simple_post_lasso <- function(y_column, x_columns, w_columns, data) {
+  # Prepare matrices
+  x_fmla <- make_formula(x=x_columns)
+  w_fmla <- make_formula(w=w_columns)
+  xw_fmla <- make_formula(x=x_columns, w=w_columns, include_x=FALSE, include_w=FALSE)
+  regressors_x <- model.matrix(x_fmla, data = data)[,-1] # Drops intercept (sigh)
+  regressors_w <- as.data.frame(model.matrix(w_fmla, data = data)[,-1])
+  colnames(regressors_w) <- "exp_actual_convo"
+  regressors_xw <- model.matrix(xw_fmla, data = data)[,-1]
+
+  regressand <- dplyr::pull(data, y_column)
+
+  # Scale regressors associated with contexts
+  regressors_x <- scale(regressors_x, center=TRUE, scale=FALSE)
+
+  # Collect all regressors
+  regressors <- cbind(regressors_x, regressors_w, regressors_xw)
+  regressors <- as.matrix(regressors)
+  # Set penalty factors to zero for treatment main effects
+  penalty_factor <- c(rep(1, ncol(regressors_x)),
+                      rep(0, ncol(regressors_w)),
+                      rep(1, ncol(regressors_xw)))
+
+  # Run glmnet, get regressors associated with nonzero coefficients
+  lasso <- glmnet::cv.glmnet(
+    x=regressors,
+    y=regressand,
+    penalty.factor=penalty_factor,
+    alpha=1,            # alpha==1 means LASSO
+    standardize=FALSE,  # Regressors were already centered
+    intercept=TRUE)    # Not included in model.matrix by default
+
+  nonzero <- coef(lasso, s=lasso$lambda.min) %>%
+    as.matrix %>%
+    .[which(. != 0),] %>% names()  %>% # Grab names
+    .[!grepl("Intercept", .)]  # Discard intercept
+
+  # Run OLS
+  fmla_post <- make_formula(y="y", x=nonzero)
+  data_post <- regressors %>%
+    dplyr::as_tibble(.) %>%
+    dplyr::mutate(y=dplyr::pull(data, y_column))
+  ols <- lm(fmla_post, data_post)
+
+  return(ols)
+}
+```
+
+
+### outcome =
+
+```{r, echo = FALSE}
+pl <- simple_post_lasso(
+    y_column=outcome,
+    x_columns=contexts,
+    w_columns=treatment,
+    data=t1_related
+  )
+
+pretty_table(summary(pl)$coef)
+```
+
+
+### outcome = t1.resid
+
+```{r, echo = FALSE}
+pl <- simple_post_lasso(
+    y_column=outcome_resid,
+    x_columns=contexts,
+    w_columns=treatment,
+    data=t1_related
+  )
+
+pretty_table(summary(pl)$coef)
+```
+
+
+## Causal Tree 
+
+### Correlation table by cate leaf
+
+```{r, echo=FALSE, message=FALSE, results="asis", warning=FALSE, eval=TRUE}
+get_cor_column <- function (table, correlation, level){
+   # order rows by correlation
+  table <- merge(table, correlation, by = "Variable")
+  table %>%
+    arrange(-abs(cor)) %>% 
+    filter(Variable!="cate") -> table  #remove row "cate"
+  
+  # extract cor and cor_pval columns
+  cor_value <- round(table$cor, digits = 2)
+  p <- table$cor_pval
+  
+  var_names <- table %>% select("Variable")
+  
+  # Define notions for significance levels; spacing is important.
+  significance <- ifelse(p < .01, "*** ", ifelse(p < .05, "**  ", ifelse(p < .1, "*   ", "    ")))
+  
+  cor_table_1 <- matrix(paste(cor_value, significance, sep=""), ncol=1)
+  colnames(cor_table_1) <- level
+  
+  cor_table_1 <- cbind(var_names, cor_table_1)
+  rownames(table ) <- NULL # numbers generated when sorting, need to remove for html 
+  tables <- list("table_1" = table, "cor_table_1" = cor_table_1)
+ 
+  return(tables)
+}
+
+```
+
+```{r, echo = FALSE}
+summarize_var_by_prediction_leaves <- function(data, covariates, level, outcome,...) {
+  # Groups together
+  grp <- data %>% dplyr::group_by(leaf_id)
+
+  # so in addition to covars, we also want to see cate
+  vars_of_interest <- c(covariates, "cate")
+
+  # Computes the mean and sem of each covariate
+  means <- grp %>%
+    dplyr::select(leaf_id, vars_of_interest ) %>%
+    dplyr::summarise_all(mean) %>%
+    dplyr::arrange(-cate)
+
+  leaf_means <- t(means) %>% .[-1,] %>% # transpose and drop the leaf row
+    as.data.frame()
+
+  # Adds row and column names
+  leaf_means <- leaf_means %>% rownames_to_column
+  colnames(leaf_means) <- c("Variable", 1:(ncol(leaf_means) -1) )
+
+  # finding difference between biggest leaf and little leaf
+  # can only do this if there is one
+  if (ncol(leaf_means) > 2){
+    max_leaf <- means %>% filter(cate == max(cate)) %>% select(leaf_id) %>% as.numeric()
+    min_leaf <- means %>% filter(cate == min(cate)) %>% select(leaf_id) %>% as.numeric()
+    # do t-test for the contexts
+    data %>%
+      dplyr::select(leaf_id, vars_of_interest) %>%
+      tidyr::gather(key = variable, value = value, -leaf_id) %>%
+      dplyr::group_by(leaf_id, variable) %>%
+      dplyr::summarise(value = list(value)) %>%
+      tidyr::spread(leaf_id, value) %>%
+      group_by(variable) %>%
+      dplyr::select("variable",as.character(c(min_leaf, max_leaf))) %>%
+      dplyr::filter(variable != "cate") -> df_list_leaf_vals
+    colnames(df_list_leaf_vals) <-  c("Variable", "min_leaf", "max_leaf")
+    # if there is no variance in the leaves then t.test can not be found
+    df_list_leaf_vals %>% dplyr::mutate(sum_var = sum(var(unlist(min_leaf)),
+                                               var(unlist(max_leaf)))) %>%
+      dplyr::mutate(p_value = ifelse(sum_var == 0, NA, t.test(unlist(min_leaf),
+                                                       unlist(max_leaf))$p.value)) -> final_context_pvalues
+    # do the t-test for CATE
+    data %>%
+      dplyr::select(level, "leaf_id", outcome) %>%
+      dplyr::filter(leaf_id %in% c(min_leaf, max_leaf)) %>%
+      dplyr::mutate(leaf_id = ifelse(leaf_id == min_leaf, "min_leaf","max_leaf")) -> mod_data
+
+    leaf_mod <- lm(as.formula(paste0(outcome, " ~ ", "leaf_id:", level)),
+                   data =  mod_data)
+
+    leaf_test <- broom::tidy(car::linearHypothesis(leaf_mod,
+                                              paste0("leaf_idmin_leaf:",level,
+                                                     " = ", "leaf_idmax_leaf:", level)))
+    final_cate_pvalue <- data.frame(Variable = c("cate"),
+                                    p_value = leaf_test$p.value[2])
+    final_pvalues <- rbind(final_context_pvalues[c("Variable", "p_value")], final_cate_pvalue)
+
+    leaf_means <- merge(leaf_means, final_pvalues, by = "Variable")
+  }
+
+  leaf_means
+}
+```
+
+
+### outcome = 
+
+```{r, echo = FALSE}
+
+# Other treatments and levels are seen as regular covariates
+fmla <- make_formula(y=outcome,
+                     x=contexts,
+                     w=treatment,
+                     include_xw=FALSE,
+                     include_intercept=TRUE) # Due to CT bug
+
+# Fit and cross-validate an __honest__ causal tree
+ctree <- fit_causal_tree(formula=fmla,
+                         w=treatment,
+                         df_train = df_train_trans,
+                         df_est = df_est_trans, 
+                         minsize = 5)
+
+# Predict leaf it on new set
+df_est_trans[,"leaf_id"] <- treeClust::rpart.predict.leaves(ctree,
+                                                      df_est_trans, type="where")
+
+cate <- as_tibble(predict(ctree, newdata = df_est_trans)) %>% rename(cate=value)
+
+# Adds this as a column called "cate"
+data_with_cate <- bind_cols(df_est_trans, cate)
+
+# Computes the ntiles of the "cate" column
+data_with_ntiles <- add_ntiles(data_with_cate, ntiles=5)
+
+
+table_1 <- summarize_var_by_prediction_leaves(data=data_with_ntiles, 
+                                       covariates= contexts,
+                                       level = treatment, 
+                                       outcome = outcome)
+
+# find correlation so we can sort out rows by it, need more than 1 leaf
+if (ncol(table_1) > 3){
+  
+  cor_leaf <- correlation_with_cate_by_variable(data=data_with_ntiles, 
+                                                covariates= contexts,
+                                                ntiles=5,
+                                                group_by_var="leaf_id")
+  hmtl_table_1 <- pretty_table(table_1)
+  
+  #create table with correlation and p-val while keeping the original table_1 
+  tables <- get_cor_column(table = table_1,
+                           correlation = cor_leaf, level = treatment)
+  
+}
+
+tables$cor_table_1
+```
+
+### outcome = t1.resid
+
+```{r, echo = FALSE}
+
+# Other treatments and levels are seen as regular covariates
+fmla <- make_formula(y=outcome_resid,
+                     x=contexts,
+                     w=treatment,
+                     include_xw=FALSE,
+                     include_intercept=TRUE) # Due to CT bug
+
+# Fit and cross-validate an __honest__ causal tree
+ctree <- fit_causal_tree(formula=fmla,
+                         w=treatment,
+                         df_train = df_train_trans,
+                         df_est = df_est_trans, 
+                         minsize = 5)
+
+# Predict leaf it on new set
+df_est_trans[,"leaf_id"] <- treeClust::rpart.predict.leaves(ctree,
+                                                      df_est_trans, type="where")
+
+cate <- as_tibble(predict(ctree, newdata = df_est_trans)) %>% rename(cate=value)
+
+# Adds this as a column called "cate"
+data_with_cate <- bind_cols(df_est_trans, cate)
+
+# Computes the ntiles of the "cate" column
+data_with_ntiles <- add_ntiles(data_with_cate, ntiles=5)
+
+
+table_1 <- summarize_var_by_prediction_leaves(data=data_with_ntiles, 
+                                       covariates= contexts,
+                                       level = treatment, 
+                                       outcome = outcome)
+
+# find correlation so we can sort out rows by it, need more than 1 leaf
+if (ncol(table_1) > 3){
+  
+  cor_leaf <- correlation_with_cate_by_variable(data=data_with_ntiles, 
+                                                covariates= contexts,
+                                                ntiles=5,
+                                                group_by_var="leaf_id")
+  hmtl_table_1 <- pretty_table(table_1)
+  
+  #create table with correlation and p-val while keeping the original table_1 
+  tables <- get_cor_column(table = table_1,
+                           correlation = cor_leaf, level = treatment)
+  
+}
+
+tables$cor_table_1
+```
