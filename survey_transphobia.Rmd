@@ -124,7 +124,7 @@ compute.factor.dv <- function(dv.names, respondent.booleans, print.loadings = TR
   # Put in the order of the main data frame
   dv.in.order <- dv[match(data$id, responders$id)]
   
-  # Rescale to mean 0 sd 1 in placebo group; treatment effects can then be interpreted
+  # Rescale to mean 0 sd 1 in control group; treatment effects can then be interpreted
   # as the effect in standard deviations the treatment would have among an untreated
   # population.
   dv.in.order <- (dv.in.order - mean(dv.in.order[!data$treat_ind], na.rm=TRUE)) /
@@ -253,7 +253,32 @@ write.csv(t1, file = "t1.csv")
 ```
 
 
-### Party: placebo vs treatment 
+### Difference-in-Differences
+```{r, echo = FALSE}
+pre <- t1 %>% 
+  group_by(treat_ind) %>% 
+  summarise(pre_period = mean(trans.tolerance.dv.t0)) %>% 
+  mutate(pre_period = round(pre_period, 2))
+
+post <- t1 %>% 
+  group_by(treat_ind) %>% 
+  summarise(post_period = mean(trans.tolerance.dv.t1)) %>% 
+  mutate(post_period = round(post_period, 2))
+
+did <- pre %>% 
+  left_join(post, by="treat_ind") %>% 
+  add_row(treat_ind = "difference", pre_period = pre$pre_period[1] - pre$pre_period[2], post_period = post$post_period[1] - post$post_period[2]) %>% 
+  add_column(difference = 0) %>% 
+  mutate(difference = pre_period - post_period)
+
+pretty_table(did)
+```
+### Party: control vs treatment 
+
+We analyze the data two ways. In Table S6, we present the conditional average treatment effect among Democrats, Independents, and Republicans on the trans.tolerance.dv.t1 factor. In Table S7, we present the interaction effect between binary variables for Democrats and Independents and the treatment indicator on the same factor (making Republicans the base category), after having been residualized on the above specified covariates. We find no evidence of heterogeneous treatment effects. (The only hint of a pattern is that Republicans are more affected than Independents.)
+
+Again, recall that because the independent variable has already been residualized, the base terms do not reflect the baseline difference between the groups (e.g., Republicans are indeed less supportive at baseline).
+
 ```{r, echo = FALSE}
 # Replacing word with number in exp_actual_convo 
 t1[t1$exp_actual_convo == "Recycling",]$exp_actual_convo = 0
@@ -263,33 +288,33 @@ t1$exp_actual_convo <- as.numeric(as.character(t1$exp_actual_convo))
 
 
 ```{r, echo = FALSE, warning=FALSE}
-# placebo <- subset(t1, treat_ind == 0)
+# control <- subset(t1, treat_ind == 0)
 # treat <- subset(t1, treat_ind == 1)
 
-placebo <- subset(t1, exp_actual_convo == 0)
+control <- subset(t1, exp_actual_convo == 0)
 treat <- subset(t1, exp_actual_convo == 1)
 ```
 
 
 ```{r, echo = FALSE, warning=FALSE}
-placebo_party <- data.frame(table(placebo$vf_party))
+control_party <- data.frame(table(control$vf_party))
 treat_party <- data.frame(table(treat$vf_party))
 
-placebo_treat_party <- merge(x = placebo_party , y = treat_party, by = "Var1", all.x = TRUE)
-colnames(placebo_treat_party) <- c("Party", "Placebo", "Treatment")
+control_treat_party <- merge(x = control_party , y = treat_party, by = "Var1", all.x = TRUE)
+colnames(control_treat_party) <- c("Party", "control", "Treatment")
 panderOptions('table.caption.prefix','')
-pretty_table(t(placebo_treat_party))
+pretty_table(t(control_treat_party))
 
 treat_non_other <- subset(treat, treat$vf_party != "Other Party")
-placebo_non_other <- subset(placebo, placebo$vf_party != "Other Party")
+control_non_other <- subset(control, control$vf_party != "Other Party")
 
 require(gridExtra)
 
-plot1 <- ggboxplot(placebo_non_other, x = "vf_party",
+plot1 <- ggboxplot(control_non_other, x = "vf_party",
       y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
       merge = TRUE,
       ylab = "trans tolerance", 
-      palette = "jco", title = "Placebo group")
+      palette = "jco", title = "control group")
 
 plot2 <- ggboxplot(treat_non_other, x = "vf_party",
       y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
@@ -299,6 +324,18 @@ plot2 <- ggboxplot(treat_non_other, x = "vf_party",
 
 grid.arrange(plot1, plot2, ncol=2)
 
+```
+
+**Table S6.**
+```{r, eval=TRUE}
+dem <- data.frame(est.ate(data$trans.tolerance.dv.t1, data$vf_democrat == 1))
+rep <- data.frame(est.ate(data$trans.tolerance.dv.t1, data$vf_republican == 1))
+ind <- data.frame(est.ate(data$trans.tolerance.dv.t1, data$vf_independent == 1))
+dem.rep.ind <- cbind(dem, rep, ind)
+colnames(dem.rep.ind) <- c("Democrats", "Republicans", "Independents")
+panderOptions('table.caption.prefix','')
+set.caption("Effects at 3 Days by Party Registration, separately. Linear regression with clustered standard errors.")
+pander(t(dem.rep.ind))
 ```
 
 **Table S7.**
@@ -311,26 +348,85 @@ set.caption("Effects at 3 Days by Party Registration, Interaction Term. Linear r
 pander(pid.interact)
 ```
 
+### Gender
 
-
-### Canvasser: placebo vs treatment 
 ```{r, echo = FALSE, warning=FALSE}
-placebo_canvas_table <- data.frame(table(placebo$canvasser_trans))
-treat_canvas_table <- data.frame(table(treat$canvasser_trans))
+# control <- subset(t1, treat_ind == 0)
+# treat <- subset(t1, treat_ind == 1)
 
-placebo_treat_canvas <- merge(placebo_canvas_table, treat_canvas_table, by = "Var1", all.x = TRUE)
-colnames(placebo_treat_canvas) <- c("Canvasser Trans", "Placebo", "Treat")
+control <- subset(t1, exp_actual_convo == 0)
+treat <- subset(t1, exp_actual_convo == 1)
+```
+
+
+```{r, echo = FALSE, warning=FALSE}
+control_party <- data.frame(table(control$vf_party))
+treat_party <- data.frame(table(treat$vf_party))
+
+control_treat_party <- merge(x = control_party , y = treat_party, by = "Var1", all.x = TRUE)
+colnames(control_treat_party) <- c("Party", "control", "Treatment")
 panderOptions('table.caption.prefix','')
-pretty_table(t(placebo_treat_canvas))
+pretty_table(t(control_treat_party))
 
-placebo_canvas <- subset(placebo, !is.na(canvasser_trans))
-treat_canvas <- subset(treat, !is.na(canvasser_trans))
+treat_non_other <- subset(treat, treat$vf_party != "Other Party")
+control_non_other <- subset(control, control$vf_party != "Other Party")
 
-p <- ggboxplot(placebo_canvas, x = "canvasser_trans",
+require(gridExtra)
+
+plot1 <- ggboxplot(control_non_other, x = "vf_party",
       y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
       merge = TRUE,
       ylab = "trans tolerance", 
-      palette = "jco", title = "Placebo group")
+      palette = "jco", title = "control group")
+
+plot2 <- ggboxplot(treat_non_other, x = "vf_party",
+      y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
+      merge = TRUE,
+      ylab = "trans tolerance", 
+      palette = "jco", title = "Treatment group")
+
+grid.arrange(plot1, plot2, ncol=2)
+
+```
+
+
+**Table S8.**
+```{r, eval=TRUE}
+fem <- data.frame(est.ate(data$trans.tolerance.dv.t1, data$vf_female == 1))
+colnames(fem) <- c("Female")
+panderOptions('table.caption.prefix','')
+set.caption("Effects at 3 Days by Party Registration, separately. Linear regression with clustered standard errors.")
+pander(t(fem))
+```
+
+**Table S9.**
+```{r, eval=TRUE}
+pid.interact <- summary(lm(t1$t1.resid ~ t1$treat_ind * t1$vf_female))$coefficients
+rownames(pid.interact) <- c("Intercept", "Treatment", "Female", "Female x Treat")
+colnames(pid.interact) <- c("Estimate", "Std. Error", "*t*", "*p*")
+panderOptions('table.caption.prefix','')
+set.caption("Effects at 3 Days by Party Registration, Interaction Term. Linear regression with clustered standard errors.")
+pander(pid.interact)
+```
+
+### Canvasser: control vs treatment 
+```{r, echo = FALSE, warning=FALSE}
+control_canvas_table <- data.frame(table(control$canvasser_trans))
+treat_canvas_table <- data.frame(table(treat$canvasser_trans))
+
+control_treat_canvas <- merge(control_canvas_table, treat_canvas_table, by = "Var1", all.x = TRUE)
+colnames(control_treat_canvas) <- c("Canvasser Trans", "control", "Treat")
+panderOptions('table.caption.prefix','')
+pretty_table(t(control_treat_canvas))
+
+control_canvas <- subset(control, !is.na(canvasser_trans))
+treat_canvas <- subset(treat, !is.na(canvasser_trans))
+
+p <- ggboxplot(control_canvas, x = "canvasser_trans",
+      y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
+      merge = TRUE,
+      ylab = "trans tolerance", 
+      palette = "jco", title = "control group")
 p <- p + stat_compare_means()
 
 
@@ -342,11 +438,10 @@ t <- ggboxplot(treat_canvas, x = "canvasser_trans",
 t <- t + stat_compare_means()
 
 grid.arrange(p, t, ncol = 2)
-
 ```
 
 
-**Table S8a.**
+**Table S10.**
 ```{r, eval=TRUE}
 pid.interact <- summary(lm(t1$t1.resid ~ t1$treat_ind * t1$canvasser_trans))$coefficients
 rownames(pid.interact) <- c("Intercept", "Treat", "Canvasser Trans", "Canvasser Trans x Treat")
@@ -357,25 +452,25 @@ pander(pid.interact)
 ```
 
 
-### Race: placebo vs treatment 
+### Race: control vs treatment 
 ```{r, echo = FALSE, warning=FALSE}
-placebo_race <- data.frame(table(placebo$vf_racename))
+control_race <- data.frame(table(control$vf_racename))
 treat_race <- data.frame(table(treat$vf_racename))
 
-placebo_treat_race <- merge(placebo_race, treat_race,  by = "Var1", all.x = TRUE)
-colnames(placebo_treat_race) <- c("Race", "Placebo", "Treat")
-pretty_table(t(placebo_treat_race))
+control_treat_race <- merge(control_race, treat_race,  by = "Var1", all.x = TRUE)
+colnames(control_treat_race) <- c("Race", "control", "Treat")
+pretty_table(t(control_treat_race))
 
 
-placebo_non_asian <- subset(placebo, placebo$vf_racename != "Asian")
+control_non_asian <- subset(control, control$vf_racename != "Asian")
 treat_non_asian <- subset(treat, treat$vf_racename != "Asian")
 require(gridExtra)
 
-plot1 <- ggboxplot(placebo_non_asian, x = "vf_racename",
+plot1 <- ggboxplot(control_non_asian, x = "vf_racename",
       y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
       merge = TRUE,
       ylab = "trans tolerance", 
-      palette = "jco", title = "Placebo group")
+      palette = "jco", title = "control group")
 
 plot2 <- ggboxplot(treat_non_asian, x = "vf_racename",
       y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
@@ -458,7 +553,7 @@ pander((treat_race_canvas))
 
 ```
 
-
+#### Difference between transgender canvasser and non-transgender canvasser in each race
 ```{r,echo = FALSE}
 
 treat_canvas <- subset(treat_canvas, treat_canvas$vf_racename != "Asian")
@@ -480,15 +575,17 @@ t.t1 <- ggboxplot(treat_canvas, x = "canvasser_trans", y = "trans.tolerance.dv.t
 t.t1 + stat_compare_means(
  aes(label = paste0("p = ", ..p.format..))
 )
+```
 
 
+#### Difference between pre-treatment and post-treatment by race and canvasser
+```{r, echo = FALSE}
 t_afam <- ggboxplot(afam, x = "canvasser_trans",
       y = c("trans.tolerance.dv.t0", "trans.tolerance.dv.t1"),
       merge = TRUE,
       ylab = "trans tolerance", 
       palette = "jco", title = "African American: Treatment group")
 t_afam <- t_afam + stat_compare_means()
-
 
 
 t_hisp <- ggboxplot(hispanic, x = "canvasser_trans",
@@ -752,7 +849,7 @@ walk2(cates, names(cates), function(data_with_cate, title) {
 ```
 
 
-### outcome =
+### outcome = trans.tolerance.dv.t1
 
 ```{r, echo = FALSE}
 pl <- simple_post_lasso(
@@ -879,7 +976,7 @@ summarize_var_by_prediction_leaves <- function(data, covariates, level, outcome,
 ```
 
 
-### outcome = 
+### outcome = trans.tolerance.dv.t1
 
 ```{r, echo = FALSE}
 
